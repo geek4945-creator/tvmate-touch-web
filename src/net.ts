@@ -1,5 +1,6 @@
 import type { Channel, Settings, Source } from "./types";
 import { hash, parseM3U } from "./parse";
+import { preferHlsChannels, preferHlsPlaylistUrl } from "./profiles";
 
 export function viaProxy(url: string, s: Settings, isStream = false): string {
   if (!s.proxy || (isStream && !s.proxyStreams)) return url;
@@ -35,8 +36,8 @@ export interface Loaded { channels: Channel[]; epgUrl?: string }
 
 export async function loadSource(src: Source, s: Settings): Promise<Loaded> {
   if (src.kind === "m3u") {
-    const { channels, epgUrl } = parseM3U(await fetchText(src.url, s));
-    return { channels, epgUrl: src.epgUrl || epgUrl };
+    const { channels, epgUrl } = parseM3U(await fetchText(preferHlsPlaylistUrl(src.url), s));
+    return { channels: preferHlsChannels(channels), epgUrl: src.epgUrl || epgUrl };
   }
   const base = src.server.replace(/\/+$/, "");
   const q = `username=${encodeURIComponent(src.user)}&password=${encodeURIComponent(src.pass)}`;

@@ -11,4 +11,5 @@ export interface Programme { channel: string; start: number; stop: number; title
 export type Source =
   | { kind: "m3u"; name: string; url: string; epgUrl?: string }
   | { kind: "xtream"; name: string; server: string; user: string; pass: string };
-export interface Settings { proxy: string; proxyStreams: boolean; epgHours: number }
+import type { NetMode, Profiles } from "./profiles";
+export interface Settings { proxy: string; proxyStreams: boolean; epgHours: number; netMode: NetMode; profiles: Profiles }

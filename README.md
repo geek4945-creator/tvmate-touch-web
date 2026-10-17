@@ -14,12 +14,16 @@ Original design; plain TypeScript + Vite + hls.js.
 - EPG grid (XMLTV, `.gz` supported where the browser has `DecompressionStream`), now-line, jump to now
 - HLS player (native HLS on Safari/iOS, hls.js elsewhere), mini player, PiP, fullscreen
 - Swipe left/right on the video to change channel; swipe down to minimize, up to expand
+- Network profiles ("Wi-Fi" and "Mobile data saver"): per-profile buffer-ahead (5–60 s; defaults 15 s / 25 s) and quality cap (Auto/480p/720p/1080p; defaults Auto / 720p); hls.js starts on the lowest variant and ramps up. Auto-detects via `navigator.connection` where available, with a manual override (iOS Safari can't detect, and plays HLS natively, ignoring these)
+- Always prefers HLS: Xtream `.ts` URLs become `.m3u8`, and a `.ts` twin is dropped when the same channel has an `.m3u8`
+- Save a playlist without testing it (fields are validated only); Test connection loads it
 - iOS layout: safe-area insets, bottom tab bar, `apple-touch-icon`, web manifest, standalone display
 
 ## Run
 ```bash
 npm install
 npm run dev        # http://<your-ip>:5173 (LAN)
+npm test           # vitest unit tests
 npm run build      # outputs dist/ (static; host anywhere over HTTPS)
 ```
 

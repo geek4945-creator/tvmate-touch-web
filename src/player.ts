@@ -1,4 +1,7 @@
 import Hls from "hls.js";
+import { levelCapIndex, type QualityCap } from "./profiles";
+
+export interface PlayOpts { bufferSec: number; cap: QualityCap }
 
 export type PlayerState = "closed" | "open" | "mini";
 
@@ -16,13 +19,27 @@ export class Player {
     video.controls = false;
   }
 
-  play(url: string) {
+  play(url: string, opts: PlayOpts = { bufferSec: 15, cap: "auto" }) {
     this.stop();
     const v = this.video;
     const isHls = /\.m3u8(\?|$)/i.test(url) || url.includes("m3u8");
     if (isHls && Hls.isSupported()) {
-      const hls = new Hls({ lowLatencyMode: false, maxBufferLength: 20 });
+      // Buffer-ahead from the active network profile. Adaptive start: begin on the lowest variant
+      // (fast first frame) and let ABR ramp up; a quality cap limits the ceiling.
+      const hls = new Hls({
+        lowLatencyMode: false,
+        maxBufferLength: opts.bufferSec,
+        maxMaxBufferLength: opts.bufferSec,
+        backBufferLength: 10,
+        startLevel: 0,
+        abrEwmaDefaultEstimate: 500_000,
+        capLevelToPlayerSize: false,
+      });
       this.hls = hls;
+      hls.on(Hls.Events.MANIFEST_PARSED, (_e, d) => {
+        const idx = levelCapIndex(d.levels, opts.cap);
+        hls.autoLevelCapping = idx; // -1 = no cap
+      });
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (!d.fatal) return;
         if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { this.onError("cors"); hls.startLoad(); }
@@ -32,7 +49,7 @@ export class Player {
       hls.loadSource(url);
       hls.attachMedia(v);
     } else {
-      // Safari/iOS: native HLS (and plain TS/MP4 where supported)
+      // Safari/iOS: native HLS (buffer and quality are chosen by the OS player; settings do not apply)
       v.src = url;
     }
     v.play().catch(() => { /* needs user gesture; tap handles it */ });

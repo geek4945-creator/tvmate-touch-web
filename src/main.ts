@@ -4,6 +4,11 @@ import { store } from "./store";
 import { CORS_MSG, MIXED_MSG, fetchEpgText, isMixedContent, loadSource, viaProxy } from "./net";
 import { parseM3U, parseXMLTV } from "./parse";
 import { Player, type PlayerState } from "./player";
+import { BUFFER_MAX, BUFFER_MIN, activeNetwork, clampBuffer, preferHlsChannels, preferHlsUrl, validateSource, type NetMode, type QualityCap } from "./profiles";
+
+const conn = () => (navigator as unknown as { connection?: object }).connection as Parameters<typeof activeNetwork>[1];
+const activeNet = () => activeNetwork(st.settings.netMode, conn());
+const activeProfile = () => st.settings.profiles[activeNet()];
 
 type Tab = "live" | "guide" | "favs" | "settings";
 const PAGE = 150;
@@ -114,7 +119,8 @@ function tune(c: Channel) {
   }
   st.cur = c;
   store.setLast(c.id);
-  player.play(viaProxy(c.url, st.settings, true));
+  const prof = activeProfile();
+  player.play(viaProxy(preferHlsUrl(c.url), st.settings, true), { bufferSec: prof.bufferSec, cap: prof.cap });
   $("ptitle").textContent = c.name;
   $("mtitle").textContent = c.name;
   const np = nowProg(c);
@@ -254,6 +260,14 @@ function renderSettings() {
     <label>Hours shown in grid</label><input type="number" id="epghours" min="3" max="48" value="${st.settings.epgHours}" />
     <button class="btn" id="loadepg">Load guide</button>
     <div class="small">${st.epg.length} programmes loaded</div></div>
+  <div class="card"><h3>Network profiles</h3>
+    <label>Network mode (detected now: ${activeNet() === "mobile" ? "Mobile data" : "Wi-Fi"}${conn() ? "" : "; this browser cannot detect it, choose manually"})</label>
+    <select id="netmode"><option value="auto" ${st.settings.netMode === "auto" ? "selected" : ""}>Auto-detect</option>
+      <option value="wifi" ${st.settings.netMode === "wifi" ? "selected" : ""}>Wi-Fi</option>
+      <option value="mobile" ${st.settings.netMode === "mobile" ? "selected" : ""}>Mobile data saver</option></select>
+    ${(["wifi", "mobile"] as const).map((k) => profileFields(k)).join("")}
+    <button class="btn alt" id="saveprof">Save profiles</button>
+    <div class="small">Applies to hls.js playback. iPhone Safari plays HLS with its built-in player, which ignores buffer and quality settings.</div></div>
   <div class="card"><h3>Proxy (for CORS)</h3>
     <label>Your proxy URL prefix, e.g. https://proxy.example.com/?url= (leave empty for none)</label><input type="url" id="proxy" value="${esc(st.settings.proxy)}" />
     <label><input type="checkbox" id="pxs" ${st.settings.proxyStreams ? "checked" : ""}/> Also route video streams through the proxy</label>
@@ -264,24 +278,44 @@ function renderSettings() {
     <div class="small">TVmate Touch Web · MIT · original design</div></div>`;
   showSrcForm("m3u");
 }
+function profileFields(k: "wifi" | "mobile"): string {
+  const p = st.settings.profiles[k];
+  const caps: [QualityCap, string][] = [["auto", "Auto"], ["480", "480p"], ["720", "720p"], ["1080", "1080p"]];
+  return `<h4 style="margin:14px 0 0">${k === "wifi" ? "Wi-Fi" : "Mobile data saver"}</h4>
+    <label>Buffer ahead: <b id="bv-${k}">${p.bufferSec}</b> s</label>
+    <input type="range" id="buf-${k}" min="${BUFFER_MIN}" max="${BUFFER_MAX}" value="${p.bufferSec}" style="width:100%" oninput="document.getElementById('bv-${k}').textContent=this.value" />
+    <label>Quality cap</label>
+    <select id="cap-${k}">${caps.map(([v, l]) => `<option value="${v}" ${p.cap === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+}
+
 function showSrcForm(kind: "m3u" | "xtream" | "paste") {
   const f = $("srcform");
   document.querySelectorAll<HTMLElement>("[data-st]").forEach((b) => b.classList.toggle("on", b.dataset.st === kind));
   const cur = store.source();
   if (kind === "m3u") {
     f.innerHTML = `<label>M3U / M3U8 URL</label><input type="url" id="m3u" placeholder="https://…/playlist.m3u" value="${esc(cur?.kind === "m3u" ? cur.url : "")}" />
-      <button class="btn" id="go-m3u">Load playlist</button>`;
+      <button class="btn" id="go-m3u">Test connection</button><button class="btn alt" id="save-m3u">Save</button>`;
   } else if (kind === "xtream") {
     const x = cur?.kind === "xtream" ? cur : null;
     f.innerHTML = `<label>Server (http://host:port)</label><input type="url" id="xs" value="${esc(x?.server ?? "")}" />
       <label>Username</label><input type="text" id="xu" autocapitalize="off" autocorrect="off" value="${esc(x?.user ?? "")}" />
       <label>Password</label><input type="password" id="xp" value="${esc(x?.pass ?? "")}" />
-      <button class="btn" id="go-x">Connect</button>`;
+      <button class="btn" id="go-x">Test connection</button><button class="btn alt" id="save-x">Save</button>`;
   } else {
     f.innerHTML = `<label>Paste M3U text or choose a file (no network needed)</label><textarea id="ptxt" rows="4"></textarea>
       <input type="file" id="pfile" accept=".m3u,.m3u8,text/plain" style="margin-top:8px" />
       <button class="btn" id="go-p">Import</button>`;
   }
+}
+
+function safeHost(u: string): string { try { return new URL(u).hostname; } catch { return u || "playlist"; } }
+
+/** Save without testing: validates the fields only, never touches the network. */
+function saveSource(src: Source) {
+  const err = validateSource(src);
+  if (err) return setStatus(err, true);
+  store.setSource(src);
+  setStatus(`Saved "${src.name}". Tap Test connection to load channels now, or load later.`);
 }
 
 function setStatus(msg: string, err = false) {
@@ -354,19 +388,31 @@ main.addEventListener("click", async (e) => {
     case "go-m3u": {
       const url = $<HTMLInputElement>("m3u").value.trim();
       const epgUrl = $<HTMLInputElement>("epgurl").value.trim() || undefined;
-      if (url) await doLoad({ kind: "m3u", name: new URL(url, location.href).hostname, url, epgUrl });
+      if (url) await doLoad({ kind: "m3u", name: safeHost(url), url, epgUrl });
       return;
+    }
+    case "save-m3u": {
+      const url = $<HTMLInputElement>("m3u").value.trim();
+      const epgUrl = $<HTMLInputElement>("epgurl").value.trim() || undefined;
+      const src: Source = { kind: "m3u", name: safeHost(url), url, epgUrl };
+      return saveSource(src);
+    }
+    case "save-x": {
+      const server = $<HTMLInputElement>("xs").value.trim(), user = $<HTMLInputElement>("xu").value.trim(), pass = $<HTMLInputElement>("xp").value;
+      return saveSource({ kind: "xtream", name: user + "@" + safeHost(server), server, user, pass });
     }
     case "go-x": {
       const server = $<HTMLInputElement>("xs").value.trim(), user = $<HTMLInputElement>("xu").value.trim(), pass = $<HTMLInputElement>("xp").value;
-      if (server && user) await doLoad({ kind: "xtream", name: user + "@" + new URL(server).hostname, server, user, pass });
+      if (server && user) await doLoad({ kind: "xtream", name: user + "@" + safeHost(server), server, user, pass });
       return;
     }
     case "go-p": {
       let text = $<HTMLTextAreaElement>("ptxt").value;
       const file = $<HTMLInputElement>("pfile").files?.[0];
       if (file) text = await file.text();
-      const { channels, epgUrl } = parseM3U(text);
+      const parsed = parseM3U(text);
+      const channels = preferHlsChannels(parsed.channels);
+      const epgUrl = parsed.epgUrl;
       if (!channels.length) return setStatus("No channels found", true);
       store.setSource({ kind: "m3u", name: "Imported", url: "", epgUrl });
       applyChannels(channels);
@@ -382,6 +428,15 @@ main.addEventListener("click", async (e) => {
       if (!target) return setStatus("Enter an XMLTV URL", true);
       await doEpg(target);
       return;
+    }
+    case "saveprof": {
+      const read = (k: "wifi" | "mobile") => ({
+        bufferSec: clampBuffer(Number($<HTMLInputElement>("buf-" + k).value)),
+        cap: $<HTMLSelectElement>("cap-" + k).value as QualityCap,
+      });
+      st.settings = { ...st.settings, netMode: $<HTMLSelectElement>("netmode").value as NetMode, profiles: { wifi: read("wifi"), mobile: read("mobile") } };
+      store.setSettings(st.settings);
+      return setStatus(`Profiles saved. Active: ${activeNet() === "mobile" ? "Mobile data saver" : "Wi-Fi"} (${activeProfile().bufferSec}s buffer).`);
     }
     case "saveproxy": {
       const p = $<HTMLInputElement>("proxy").value.trim();
