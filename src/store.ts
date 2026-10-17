@@ -1,5 +1,6 @@
 import type { Channel, Programme, Settings, Source } from "./types";
 import { DEFAULT_PROFILES, sanitizeProfiles } from "./profiles";
+import { inferMode } from "./proxy";
 
 const get = <T>(k: string, d: T): T => {
   try { const v = localStorage.getItem("tm." + k); return v ? (JSON.parse(v) as T) : d; } catch { return d; }
@@ -17,8 +18,12 @@ export const store = {
   setFavorites: (f: Set<string>) => set("favs", [...f]),
   settings: (): Settings => {
     const s = get<Partial<Settings>>("settings", {});
+    // Migration: older versions had one "proxy" URL + token. Map it onto the dropdown.
+    const legacy = inferMode(s.proxy ?? "");
+    const workerToken = s.workerToken ?? (legacy === "worker" ? s.proxyToken ?? "" : "");
+    const proxyMode = s.proxyMode ?? (legacy !== "none" ? legacy : workerToken ? "worker" : "none");
     return {
-      proxy: s.proxy ?? "", proxyStreams: s.proxyStreams ?? false, proxyToken: s.proxyToken ?? "", epgHours: s.epgHours ?? 12,
+      proxyMode, workerToken, proxy: legacy === "worker" || legacy === "local" ? "" : s.proxy ?? "", proxyStreams: s.proxyStreams ?? false, proxyToken: s.proxyToken ?? "", epgHours: s.epgHours ?? 12,
       netMode: s.netMode ?? "auto", profiles: sanitizeProfiles(s.profiles ?? DEFAULT_PROFILES),
     };
   },

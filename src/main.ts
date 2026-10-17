@@ -1,6 +1,7 @@
 import "./style.css";
-import type { Channel, Programme, Source } from "./types";
+import type { Channel, Programme, Settings, Source } from "./types";
 import { store } from "./store";
+import { WORKER_URL, resolveProxy, testProxy, type ProxyMode } from "./proxy";
 import { CORS_MSG, MIXED_MSG, fetchEpgText, isMixedContent, loadSource, viaProxy } from "./net";
 import { parseM3U, parseXMLTV } from "./parse";
 import { Player, type PlayerState } from "./player";
@@ -114,7 +115,7 @@ function setPState(s: PlayerState) {
 }
 function tune(c: Channel) {
   if (isMixedContent(c.url, st.settings, true)) {
-    alert(MIXED_MSG + "\n\nTick 'Also route video streams through the proxy' once a proxy is set.");
+    alert(MIXED_MSG + "\n\nPick a proxy in Settings and tick 'Also route video streams through the proxy'.");
     return;
   }
   st.cur = c;
@@ -268,12 +269,28 @@ function renderSettings() {
     ${(["wifi", "mobile"] as const).map((k) => profileFields(k)).join("")}
     <button class="btn alt" id="saveprof">Save profiles</button>
     <div class="small">Applies to hls.js playback. iPhone Safari plays HLS with its built-in player, which ignores buffer and quality settings.</div></div>
-  <div class="card"><h3>Video proxy (CORS / blocked networks)</h3>
-    <label>Proxy / Worker URL, e.g. https://tvmate-proxy.you.workers.dev or https://proxy.example.com/?url= (empty = none)</label><input type="url" id="proxy" value="${esc(st.settings.proxy)}" />
-    <label>Access token (only if your proxy needs one, e.g. the Worker's PROXY_TOKEN)</label><input type="password" id="proxytoken" autocomplete="off" value="${esc(st.settings.proxyToken)}" />
+  <div class="card"><h3>Proxy (fixes CORS / blocked networks)</h3>
+    <label for="pxmode">Proxy</label>
+    <select id="pxmode">
+      ${([["none", "None (direct)"], ["worker", "TVmate Cloudflare Worker (recommended)"], ["local", "Local proxy (http://localhost:8787)"], ["custom", "Custom URL"]] as const)
+        .map(([v, t]) => `<option value="${v}" ${st.settings.proxyMode === v ? "selected" : ""}>${t}</option>`).join("")}
+    </select>
+    <div id="px-worker" ${st.settings.proxyMode === "worker" ? "" : "hidden"}>
+      <label for="wtoken">Worker access token (stored only on this device)</label>
+      <input type="password" id="wtoken" autocomplete="off" placeholder="paste the token once" value="${esc(st.settings.workerToken)}" />
+      <div class="small">Uses ${esc(WORKER_URL)}. Without a token the Worker is not used.</div></div>
+    <div id="px-local" ${st.settings.proxyMode === "local" ? "" : "hidden"}>
+      <div class="small">Run <code>node proxy/server.mjs</code> on this device (see README). Works from desktop Chrome/Firefox; iPhone Safari blocks http://localhost from an HTTPS page.</div></div>
+    <div id="px-custom" ${st.settings.proxyMode === "custom" ? "" : "hidden"}>
+      <label for="proxy">Proxy URL, e.g. https://proxy.example.com/?url=</label>
+      <input type="url" id="proxy" value="${esc(st.settings.proxy)}" />
+      <label for="proxytoken">Access token (optional)</label>
+      <input type="password" id="proxytoken" autocomplete="off" value="${esc(st.settings.proxyToken)}" /></div>
     <label><input type="checkbox" id="pxs" ${st.settings.proxyStreams ? "checked" : ""}/> Also route video streams through the proxy</label>
-    <button class="btn alt" id="saveproxy">Save</button>
-    <div class="small">Browsers block most IPTV servers (no CORS headers). Without a proxy, https:// providers that allow CORS work; plain http:// ones are blocked on this HTTPS site. See README.</div></div>
+    <div class="row"><button class="btn alt" id="saveproxy">Save</button><button class="btn alt" id="testproxy">Test proxy</button></div>
+    <div class="status" id="pxstatus"></div>
+    <div class="small">Browsers block most IPTV servers (no CORS headers) and plain http:// ones on this HTTPS site; a proxy fixes both.
+      Public CORS proxies (corsproxy.io and similar) are deliberately not offered: they log your traffic and often break streams. See README.</div></div>
   <div class="card"><h3>Data</h3>
     <button class="btn alt" id="clear">Clear everything</button>
     <div class="small">TVmate Touch Web · MIT · original design</div></div>`;
@@ -440,17 +457,45 @@ main.addEventListener("click", async (e) => {
       return setStatus(`Profiles saved. Active: ${activeNet() === "mobile" ? "Mobile data saver" : "Wi-Fi"} (${activeProfile().bufferSec}s buffer).`);
     }
     case "saveproxy": {
-      const p = $<HTMLInputElement>("proxy").value.trim();
-      if (p && !/^https?:\/\//i.test(p)) return setStatus("Proxy URL should look like https://host/?url=", true);
-      st.settings = { ...st.settings, proxy: p, proxyStreams: $<HTMLInputElement>("pxs").checked, proxyToken: $<HTMLInputElement>("proxytoken").value.trim() };
+      const next = readProxyForm();
+      if (next.proxyMode === "custom" && !/^https?:\/\//i.test(next.proxy)) return setPxStatus("Custom proxy URL should look like https://host/?url=", true);
+      st.settings = next;
       store.setSettings(st.settings);
-      return setStatus("Proxy saved.");
+      const r = resolveProxy(st.settings);
+      return setPxStatus(r.needsToken ? "Saved, but the Worker stays off until you enter its access token." : "Proxy saved.", r.needsToken);
+    }
+    case "testproxy": {
+      setPxStatus("Testing…");
+      const res = await testProxy(readProxyForm());
+      return setPxStatus(res.message, !res.ok);
     }
     case "clear":
       if (confirm("Remove playlist, favorites, guide and settings?")) { localStorage.clear(); sessionStorage.clear(); location.reload(); }
   }
 });
 main.addEventListener("input", () => { /* placeholder for future inline filters */ });
+main.addEventListener("change", (e) => {
+  const t = e.target as HTMLElement;
+  if (t.id !== "pxmode") return;
+  const mode = (t as HTMLSelectElement).value as ProxyMode;
+  for (const m of ["worker", "local", "custom"]) document.getElementById("px-" + m)!.toggleAttribute("hidden", m !== mode);
+  // One selection should fix CORS: routing streams too is the sensible default for a real proxy.
+  if (mode !== "none") $<HTMLInputElement>("pxs").checked = true;
+});
+function readProxyForm(): Settings {
+  return {
+    ...st.settings,
+    proxyMode: $<HTMLSelectElement>("pxmode").value as ProxyMode,
+    workerToken: $<HTMLInputElement>("wtoken").value.trim(),
+    proxy: $<HTMLInputElement>("proxy").value.trim(),
+    proxyToken: $<HTMLInputElement>("proxytoken").value.trim(),
+    proxyStreams: $<HTMLInputElement>("pxs").checked,
+  };
+}
+function setPxStatus(msg: string, err = false) {
+  const el = document.getElementById("pxstatus");
+  if (el) { el.textContent = msg; el.className = "status" + (err ? " err" : ""); }
+}
 
 // refresh "now" lines every minute
 setInterval(() => { if (st.tab !== "settings" && document.activeElement?.tagName !== "INPUT") renderMain(false); }, 60000);
@@ -462,7 +507,7 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
 if (!localStorage.getItem("tm.settings") && location.protocol.startsWith("http")) {
   fetch(new URL("./__proxy", location.href)).then((r) => (r.ok ? r.text() : "")).then((t) => {
     if (t === "ok") {
-      st.settings = { ...st.settings, proxy: new URL("./?url=", location.href).href, proxyStreams: true };
+      st.settings = { ...st.settings, proxyMode: "custom", proxy: new URL("./?url=", location.href).href, proxyStreams: true };
       store.setSettings(st.settings);
       if (st.tab === "settings") renderMain(false);
     }

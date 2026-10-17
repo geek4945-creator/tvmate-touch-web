@@ -1,23 +1,27 @@
 import type { Channel, Settings, Source } from "./types";
 import { hash, parseM3U } from "./parse";
-import { buildProxied, preferHlsChannels, preferHlsPlaylistUrl } from "./profiles";
+import { preferHlsChannels, preferHlsPlaylistUrl, buildProxied } from "./profiles";
+import { resolveProxy } from "./proxy";
 
 export function viaProxy(url: string, s: Settings, isStream = false): string {
-  if (!s.proxy || (isStream && !s.proxyStreams)) return url;
-  return buildProxied(s.proxy, s.proxyToken, url);
+  const r = resolveProxy(s);
+  if (!r.base || (isStream && !s.proxyStreams)) return url;
+  return buildProxied(r.base, r.token, url);
 }
 
 /** True when this page is HTTPS and the target is plain http:// without a proxy: browsers block it (mixed content). */
 export function isMixedContent(url: string, s: Settings, isStream = false): boolean {
-  return location.protocol === "https:" && /^http:\/\//i.test(viaProxy(url, s, isStream));
+  const out = viaProxy(url, s, isStream);
+  // http://localhost is treated as secure by Chrome/Firefox, so it is not mixed content there.
+  return location.protocol === "https:" && /^http:\/\//i.test(out) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(out);
 }
 
 const MIXED_MSG =
   "Blocked: this app is served over HTTPS but the provider URL is plain http:// (mixed content). " +
-  "Set a Proxy URL in Settings (your own HTTPS proxy, see README), or use an https:// provider URL.";
+  "Open Settings and pick a proxy in the Proxy dropdown (for example TVmate Cloudflare Worker), or use an https:// provider URL.";
 const CORS_MSG =
   "The browser blocked the request (most likely CORS: the provider does not allow web pages to read it, " +
-  "or the server is unreachable). Set a Proxy URL in Settings to route requests through a proxy you host. See README.";
+  "or the server is unreachable). Open Settings and choose a proxy in the Proxy dropdown (TVmate Cloudflare Worker, Local, or Custom), then press Test proxy.";
 export { MIXED_MSG, CORS_MSG };
 
 async function fetchText(url: string, s: Settings): Promise<string> {

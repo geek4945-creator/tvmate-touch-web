@@ -1,9 +1,4 @@
-# TVmate Touch Web (PWA)
-
-**Live:** https://geek4945-creator.github.io/tvmate-touch-web/ · open in iPhone Safari → Share → Add to Home Screen.
-
-> Bring your own playlist: this app ships no channels. Use it only with content you are entitled to watch.
-
+# TVmate Touch – Web (PWA)
 
 A touch-first IPTV player that runs in any modern browser and installs to the iPhone home screen from Safari.
 Original design; plain TypeScript + Vite + hls.js.
@@ -14,16 +9,12 @@ Original design; plain TypeScript + Vite + hls.js.
 - EPG grid (XMLTV, `.gz` supported where the browser has `DecompressionStream`), now-line, jump to now
 - HLS player (native HLS on Safari/iOS, hls.js elsewhere), mini player, PiP, fullscreen
 - Swipe left/right on the video to change channel; swipe down to minimize, up to expand
-- Network profiles ("Wi-Fi" and "Mobile data saver"): per-profile buffer-ahead (5–60 s; defaults 15 s / 25 s) and quality cap (Auto/480p/720p/1080p; defaults Auto / 720p); hls.js starts on the lowest variant and ramps up. Auto-detects via `navigator.connection` where available, with a manual override (iOS Safari can't detect, and plays HLS natively, ignoring these)
-- Always prefers HLS: Xtream `.ts` URLs become `.m3u8`, and a `.ts` twin is dropped when the same channel has an `.m3u8`
-- Save a playlist without testing it (fields are validated only); Test connection loads it
 - iOS layout: safe-area insets, bottom tab bar, `apple-touch-icon`, web manifest, standalone display
 
 ## Run
 ```bash
 npm install
 npm run dev        # http://<your-ip>:5173 (LAN)
-npm test           # vitest unit tests
 npm run build      # outputs dist/ (static; host anywhere over HTTPS)
 ```
 
@@ -39,7 +30,7 @@ Also, an HTTPS-hosted page cannot load `http://` streams (mixed content). Soluti
    ```bash
    node proxy/server.mjs                 # PORT=8787, optional ALLOW_HOSTS=provider.example.com
    ```
-2. In the app: Settings → Proxy URL = `http://<proxy-host>:8787/?url=`
+2. In the app: Settings → Proxy dropdown → "Local proxy" (http://localhost:8787) or "Custom URL" (`http://<proxy-host>:8787/?url=`)
    and tick "Also route video streams through the proxy" if streams fail.
    For use from an HTTPS-hosted app put the proxy behind HTTPS too (Caddy/nginx/Cloudflare Tunnel).
 
@@ -47,17 +38,19 @@ The proxy rewrites `.m3u8` manifests so segments are fetched through it. It has 
 without restricting `ALLOW_HOSTS` and adding auth at the reverse proxy.
 Notes: native iOS Safari playback of non-HLS (raw `.ts`) streams generally does not work.
 
-## Limits of a hosted, proxy-less web app
-- Providers that send no CORS headers cannot be read from the browser; plain `http://` providers are blocked on this HTTPS site (mixed content). The app shows a clear message and a Proxy URL setting for a proxy you host.
-- Playlist, favorites and settings stay in your browser's local storage.
-
 ## Not yet implemented
-Recording, multiview, parental PIN, catch-up, reminders.
-
-## License
-MIT (see LICENSE). Original code; not affiliated with any commercial IPTV player.
+Recording, multiview, parental PIN, catch-up, reminders (see ../docs/FEATURES.md).
 
 ## Hosting over HTTPS
-- **GitHub Pages:** `.github/workflows/pages.yml` builds and deploys `dist` on every push to `main` (Settings → Pages → Source: GitHub Actions). Vite `base` is `./`, so it works under any sub-path. Pages hosts only the app; provider URLs may need an HTTPS proxy.
+- **GitHub Pages:** `.github/workflows/pages.yml` deploys `web/dist` on push. Pages needs a public repo (or a paid plan for private repos).
+  Enable with Settings → Pages → Source: GitHub Actions. Pages hosts only the app; you still need an HTTPS proxy for provider URLs.
 - **Single origin (recommended for testing):** `npm run build && STATIC_DIR=dist PORT=8787 node proxy/server.mjs` serves the app *and* the proxy
   from one origin; the app auto-detects it and enables the proxy. Put any HTTPS tunnel/reverse proxy in front (Cloudflare Tunnel, Caddy, Tailscale Funnel) and open that URL in iPhone Safari.
+
+## Proxy dropdown (Settings)
+
+One selection fixes CORS / mixed content: **None (direct)**, **TVmate Cloudflare Worker** (recommended; deploy `proxy-worker/` from the
+main repo, then paste its access token once; it is stored only in this browser's localStorage and is never part of the source or bundle),
+**Local proxy** (`http://localhost:8787`, `node proxy/server.mjs`; not usable from iPhone Safari on an HTTPS page) and **Custom URL** (+ optional token).
+"Test proxy" checks the Worker `/health` and a token-checked HEAD relay of a public HLS playlist. Public CORS proxies (corsproxy.io, allorigins, ...)
+are intentionally not offered: they log traffic and often break streams.
