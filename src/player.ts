@@ -1,5 +1,6 @@
 import Hls from "hls.js";
 import { levelCapIndex, type QualityCap } from "./profiles";
+import { isFormatRelated, type PlayFailure } from "./diag";
 
 export interface PlayOpts { bufferSec: number; cap: QualityCap }
 
@@ -9,7 +10,10 @@ export type PlayerState = "closed" | "open" | "mini";
 export class Player {
   readonly video: HTMLVideoElement;
   private hls: Hls | null = null;
-  onError: (msg: string) => void = () => {};
+  private ts: { destroy(): void } | null = null;
+  /** Called once per failed attempt (after in-player retries). */
+  onFail: (f: PlayFailure) => void = () => {};
+  private retries = 0;
 
   constructor(video: HTMLVideoElement) {
     this.video = video;
@@ -40,11 +44,17 @@ export class Player {
         const idx = levelCapIndex(d.levels, opts.cap);
         hls.autoLevelCapping = idx; // -1 = no cap
       });
+      this.retries = 0;
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (!d.fatal) return;
-        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { this.onError("cors"); hls.startLoad(); }
-        else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { this.onError("Playback failed"); this.stop(); }
+        const status = (d.response as { code?: number } | undefined)?.code;
+        const detail = String(d.details);
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.retries++ < 2) { hls.recoverMediaError(); return; }
+        // An HTTP error status (404, 403, ...) will not fix itself: report it now. Only status-less network
+        // errors (timeouts, dropped connections) get a couple of retries.
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR && !(status && status >= 400) && this.retries++ < 2) { hls.startLoad(); return; }
+        this.stop();
+        this.onFail({ status: status || undefined, detail, formatRelated: isFormatRelated(status, detail) });
       });
       hls.loadSource(url);
       hls.attachMedia(v);
@@ -55,7 +65,28 @@ export class Player {
     v.play().catch(() => { /* needs user gesture; tap handles it */ });
   }
 
+  /** Raw MPEG-TS (live) through mpegts.js, loaded on demand. Returns false when this browser cannot do it (e.g. iPhone Safari). */
+  async playTs(url: string): Promise<boolean> {
+    const mod = await import("mpegts.js");
+    const mpegts = (mod as unknown as { default: any }).default ?? mod;
+    if (!mpegts.isSupported()) return false;
+    this.stop();
+    const p = mpegts.createPlayer({ type: "mpegts", isLive: true, url }, { enableWorker: false, liveBufferLatencyChasing: false });
+    this.ts = p;
+    p.attachMediaElement(this.video);
+    p.on(mpegts.Events.ERROR, (_t: string, detail: string, info: { code?: number } | undefined) => {
+      const status = info?.code && info.code >= 100 ? info.code : undefined;
+      this.stop();
+      this.onFail({ status, detail: String(detail), formatRelated: false });
+    });
+    p.load();
+    void this.video.play().catch(() => {});
+    return true;
+  }
+
   stop() {
+    try { this.ts?.destroy(); } catch { /* ignore */ }
+    this.ts = null;
     this.hls?.destroy();
     this.hls = null;
     this.video.removeAttribute("src");

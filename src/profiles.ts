@@ -75,6 +75,16 @@ export function preferHlsPlaylistUrl(url: string): string {
   return /[?&]output=ts\b/i.test(url) ? url.replace(/([?&]output=)ts\b/i, "$1m3u8") : url;
 }
 
+const XTREAM_LIVE = /^(.*\/live\/[^/]+\/[^/]+\/\d+)\.(ts|m3u8)(\?.*)?$/i;
+/** The other Xtream live output format for the same channel (m3u8 <-> ts), or null for non-Xtream URLs. */
+export function xtreamAlternate(url: string): { url: string; from: "ts" | "m3u8"; to: "ts" | "m3u8" } | null {
+  const m = XTREAM_LIVE.exec(url);
+  if (!m) return null;
+  const from = m[2].toLowerCase() as "ts" | "m3u8";
+  const to = from === "ts" ? "m3u8" : "ts";
+  return { url: `${m[1]}.${to}${m[3] ?? ""}`, from, to };
+}
+
 const keyOf = (c: Channel) => (c.tvgId ? "id:" + c.tvgId : "n:" + c.name.trim().toLowerCase());
 
 /** Rewrites Xtream TS URLs, then drops a .ts/other variant when the same channel also has an .m3u8 entry. */

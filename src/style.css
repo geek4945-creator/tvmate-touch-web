@@ -90,3 +90,4 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .status.err { color: #ff7a7a; }
 .small { color: var(--dim); font-size: 12px; }
 .card select { width: 100%; flex: none; }
+.ovl .sub.err { color: #ff8a80; white-space: normal; font-size: 11px; line-height: 1.3; }

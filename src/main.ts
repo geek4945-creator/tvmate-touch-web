@@ -1,11 +1,12 @@
 import "./style.css";
 import type { Channel, Programme, Settings, Source } from "./types";
 import { store } from "./store";
+import { describeFailure, hostOf, type PlayFailure } from "./diag";
 import { WORKER_URL, resolveProxy, testProxy, type ProxyMode } from "./proxy";
-import { CORS_MSG, MIXED_MSG, fetchEpgText, isMixedContent, loadSource, viaProxy } from "./net";
+import { MIXED_MSG, fetchEpgText, isMixedContent, loadSource, viaProxy } from "./net";
 import { parseM3U, parseXMLTV } from "./parse";
 import { Player, type PlayerState } from "./player";
-import { BUFFER_MAX, BUFFER_MIN, activeNetwork, clampBuffer, preferHlsChannels, preferHlsUrl, validateSource, type NetMode, type QualityCap } from "./profiles";
+import { BUFFER_MAX, BUFFER_MIN, activeNetwork, clampBuffer, preferHlsChannels, preferHlsUrl, validateSource, xtreamAlternate, type NetMode, type QualityCap } from "./profiles";
 
 const conn = () => (navigator as unknown as { connection?: object }).connection as Parameters<typeof activeNetwork>[1];
 const activeNet = () => activeNetwork(st.settings.netMode, conn());
@@ -71,7 +72,7 @@ app.innerHTML = `
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const main = $("main"), hdr = $("hdr"), playerEl = $("player"), toastEl = $("toast");
 const player = new Player($<HTMLVideoElement>("video"));
-player.onError = (m) => toast(m === "cors" ? CORS_MSG.slice(0, 90) + "…" : m);
+player.onFail = (f) => void onPlayFailure(f);
 
 function toast(msg: string) {
   toastEl.textContent = msg;
@@ -113,6 +114,61 @@ function setPState(s: PlayerState) {
   document.body.classList.toggle("playing-mini", s === "mini");
   if (s === "closed") player.stop();
 }
+interface Attempt { ch: Channel; url: string; format?: string; fellBackFrom?: string; tried: string[] }
+let attempt: Attempt | null = null;
+const fmtOf = (u: string) => /\.m3u8(\?|$)/i.test(u) ? "m3u8" : /\.ts(\?|$)/i.test(u) ? "ts" : undefined;
+
+function playAttempt(a: Attempt) {
+  const prof = activeProfile();
+  const routed = viaProxy(a.url, st.settings, true);
+  if (a.format === "ts") {
+    void player.playTs(routed).then((ok) => {
+      if (!ok) showFailure({ detail: "raw TS is not supported in this browser", formatRelated: false }, "this browser cannot play raw TS (needs MSE; not iPhone Safari)");
+    });
+  } else {
+    player.play(routed, { bufferSec: prof.bufferSec, cap: prof.cap });
+  }
+}
+
+function showFailure(f: PlayFailure, note?: string) {
+  const a = attempt;
+  if (!a) return;
+  const r = resolveProxy(st.settings);
+  const routed = viaProxy(a.url, st.settings, true);
+  const msg = describeFailure(f, {
+    proxyHost: routed !== a.url ? hostOf(r.base) : undefined,
+    targetHost: hostOf(a.url), format: a.format, fellBackFrom: a.fellBackFrom,
+    net: activeNet(), cap: activeProfile().cap, bufferSec: activeProfile().bufferSec, note,
+  });
+  const el = document.getElementById("psub");
+  if (el) { el.textContent = "Playback error: " + msg; el.classList.add("err"); }
+  toast("Playback error: " + msg.split(" | ")[0]);
+  console.warn("[tvmate] playback error:", msg);
+}
+
+async function onPlayFailure(f: PlayFailure) {
+  const a = attempt;
+  if (!a) return;
+  // Prefer-HLS safety net: some Xtream panels do not serve /live/u/p/id.m3u8 (404). Try the other format once.
+  const alt = f.formatRelated ? xtreamAlternate(a.url) : null;
+  if (alt && !a.tried.includes(alt.to)) {
+    a.tried.push(alt.to);
+    a.fellBackFrom = alt.from;
+    a.url = alt.url;
+    a.format = alt.to;
+    if (alt.to === "ts" && !(await tsPlayable())) {
+      showFailure(f, `${alt.from} failed; the ts fallback needs a browser with MSE (not iPhone Safari)`);
+      return;
+    }
+    playAttempt(a);
+    return;
+  }
+  showFailure(f, a.fellBackFrom ? `${a.fellBackFrom} failed first, then ${a.format} failed` : undefined);
+}
+async function tsPlayable(): Promise<boolean> {
+  try { const m: any = await import("mpegts.js"); return !!(m.default ?? m).isSupported(); } catch { return false; }
+}
+
 function tune(c: Channel) {
   if (isMixedContent(c.url, st.settings, true)) {
     alert(MIXED_MSG + "\n\nPick a proxy in Settings and tick 'Also route video streams through the proxy'.");
@@ -120,8 +176,11 @@ function tune(c: Channel) {
   }
   st.cur = c;
   store.setLast(c.id);
-  const prof = activeProfile();
-  player.play(viaProxy(preferHlsUrl(c.url), st.settings, true), { bufferSec: prof.bufferSec, cap: prof.cap });
+  const url = preferHlsUrl(c.url);
+  attempt = { ch: c, url, format: fmtOf(url), tried: [fmtOf(url) ?? ""] };
+  const sub = document.getElementById("psub");
+  sub?.classList.remove("err");
+  playAttempt(attempt);
   $("ptitle").textContent = c.name;
   $("mtitle").textContent = c.name;
   const np = nowProg(c);

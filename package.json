@@ -11,7 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "hls.js": "^1.5.15"
+    "hls.js": "^1.5.15",
+    "mpegts.js": "^1.8.2"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
