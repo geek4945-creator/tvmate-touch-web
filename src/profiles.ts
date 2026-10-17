@@ -94,3 +94,18 @@ export function validateSource(src: Source): string | null {
   if (!src.pass) return "Password is required.";
   return null;
 }
+
+// ---------- video proxy (Cloudflare Worker or any ?url= proxy) ----------
+/** Accepts "https://w.example", "https://w.example/" or "https://w.example/?url=" and returns a prefix ending in "url=". */
+export function normalizeProxyPrefix(p: string): string {
+  const t = p.trim();
+  if (!t) return "";
+  if (/url=$/i.test(t)) return t;
+  return t.replace(/[?&]+$/, "").replace(/\/+$/, "") + "/?url=";
+}
+
+export function buildProxied(proxy: string, token: string, url: string): string {
+  const prefix = normalizeProxyPrefix(proxy);
+  if (!prefix) return url;
+  return prefix + encodeURIComponent(url) + (token.trim() ? "&token=" + encodeURIComponent(token.trim()) : "");
+}

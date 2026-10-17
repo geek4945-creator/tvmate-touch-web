@@ -18,7 +18,7 @@ export const store = {
   settings: (): Settings => {
     const s = get<Partial<Settings>>("settings", {});
     return {
-      proxy: s.proxy ?? "", proxyStreams: s.proxyStreams ?? false, epgHours: s.epgHours ?? 12,
+      proxy: s.proxy ?? "", proxyStreams: s.proxyStreams ?? false, proxyToken: s.proxyToken ?? "", epgHours: s.epgHours ?? 12,
       netMode: s.netMode ?? "auto", profiles: sanitizeProfiles(s.profiles ?? DEFAULT_PROFILES),
     };
   },

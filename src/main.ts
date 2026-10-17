@@ -268,8 +268,9 @@ function renderSettings() {
     ${(["wifi", "mobile"] as const).map((k) => profileFields(k)).join("")}
     <button class="btn alt" id="saveprof">Save profiles</button>
     <div class="small">Applies to hls.js playback. iPhone Safari plays HLS with its built-in player, which ignores buffer and quality settings.</div></div>
-  <div class="card"><h3>Proxy (for CORS)</h3>
-    <label>Your proxy URL prefix, e.g. https://proxy.example.com/?url= (leave empty for none)</label><input type="url" id="proxy" value="${esc(st.settings.proxy)}" />
+  <div class="card"><h3>Video proxy (CORS / blocked networks)</h3>
+    <label>Proxy / Worker URL, e.g. https://tvmate-proxy.you.workers.dev or https://proxy.example.com/?url= (empty = none)</label><input type="url" id="proxy" value="${esc(st.settings.proxy)}" />
+    <label>Access token (only if your proxy needs one, e.g. the Worker's PROXY_TOKEN)</label><input type="password" id="proxytoken" autocomplete="off" value="${esc(st.settings.proxyToken)}" />
     <label><input type="checkbox" id="pxs" ${st.settings.proxyStreams ? "checked" : ""}/> Also route video streams through the proxy</label>
     <button class="btn alt" id="saveproxy">Save</button>
     <div class="small">Browsers block most IPTV servers (no CORS headers). Without a proxy, https:// providers that allow CORS work; plain http:// ones are blocked on this HTTPS site. See README.</div></div>
@@ -441,7 +442,7 @@ main.addEventListener("click", async (e) => {
     case "saveproxy": {
       const p = $<HTMLInputElement>("proxy").value.trim();
       if (p && !/^https?:\/\//i.test(p)) return setStatus("Proxy URL should look like https://host/?url=", true);
-      st.settings = { ...st.settings, proxy: p, proxyStreams: $<HTMLInputElement>("pxs").checked };
+      st.settings = { ...st.settings, proxy: p, proxyStreams: $<HTMLInputElement>("pxs").checked, proxyToken: $<HTMLInputElement>("proxytoken").value.trim() };
       store.setSettings(st.settings);
       return setStatus("Proxy saved.");
     }

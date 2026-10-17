@@ -91,3 +91,19 @@ describe("validateSource (Save without test)", () => {
     expect(validateSource({ kind: "xtream", name: "n", server: "http://h", user: "u", pass: "" })).toMatch(/Password/);
   });
 });
+
+import { buildProxied, normalizeProxyPrefix } from "../src/profiles";
+describe("video proxy url", () => {
+  it("normalises worker URLs to a ?url= prefix", () => {
+    expect(normalizeProxyPrefix("")).toBe("");
+    expect(normalizeProxyPrefix("https://w.dev")).toBe("https://w.dev/?url=");
+    expect(normalizeProxyPrefix("https://w.dev/")).toBe("https://w.dev/?url=");
+    expect(normalizeProxyPrefix("https://w.dev/?url=")).toBe("https://w.dev/?url=");
+    expect(normalizeProxyPrefix("https://w.dev/?")).toBe("https://w.dev/?url=");
+  });
+  it("builds proxied URLs with optional token", () => {
+    expect(buildProxied("https://w.dev", "", "http://h/a.m3u8?x=1")).toBe("https://w.dev/?url=http%3A%2F%2Fh%2Fa.m3u8%3Fx%3D1");
+    expect(buildProxied("https://w.dev/?url=", " t/1 ", "http://h/a")).toBe("https://w.dev/?url=http%3A%2F%2Fh%2Fa&token=t%2F1");
+    expect(buildProxied("", "t", "http://h/a")).toBe("http://h/a");
+  });
+});

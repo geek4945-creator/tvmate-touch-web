@@ -1,10 +1,10 @@
 import type { Channel, Settings, Source } from "./types";
 import { hash, parseM3U } from "./parse";
-import { preferHlsChannels, preferHlsPlaylistUrl } from "./profiles";
+import { buildProxied, preferHlsChannels, preferHlsPlaylistUrl } from "./profiles";
 
 export function viaProxy(url: string, s: Settings, isStream = false): string {
   if (!s.proxy || (isStream && !s.proxyStreams)) return url;
-  return s.proxy + encodeURIComponent(url);
+  return buildProxied(s.proxy, s.proxyToken, url);
 }
 
 /** True when this page is HTTPS and the target is plain http:// without a proxy: browsers block it (mixed content). */
